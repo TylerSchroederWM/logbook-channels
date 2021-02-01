@@ -21,3 +21,108 @@ clientFactory(function(err, client) {
   });
 });
 ```
+
+To integrate into Patchfoo:
+```
+Serve.prototype.logbook = function (ext) {
+  var q = this.query
+  var opts = {
+    reverse: !q.forwards,
+    //sortByTimestamp: q.sort === 'claimed',
+    sortByTimestamp: q.sort || 'claimed',
+    lt: Number(q.lt) || Date.now(),
+    gt: Number(q.gt) || -Infinity,
+    filter: q.filter,
+  }
+
+  logbook.getMessages(this.app.sbot, "logbook", this, function(messageStream, serve) {
+    pull(messageStream,
+	    serve.renderThreadPaginated(opts, null, q),
+	    serve.wrapMessages(),
+	    serve.wrapPublic(),
+	    serve.wrapPage('logbook'),
+	    serve.respondSink(200, {
+		    'Content-Type': ctype(ext)
+	    })
+	    //pull.drain(function(msg) {
+		    //console.log(JSON.stringify(msg));
+	    //})
+    )
+  }
+  , hops=3)
+
+	    //this.renderThreadPaginated(opts, null, q),
+	    //this.wrapMessages(),
+	    //this.wrapPublic(),
+	    //this.wrapPage('public'),
+	    //this.respondSink(200, {
+		    //'Content-Type': ctype(ext)
+	    //})
+    //)
+    //});
+
+  //pull(
+    //this.app.createLogStream(opts),
+    //pull.filter(msg => {
+      //return !msg.value.content.vote
+    //}),
+    //this.renderThreadPaginated(opts, null, q),
+    //this.wrapMessages(),
+    //this.wrapPublic(),
+    //this.wrapPage('public'),
+    //this.respondSink(200, {
+      //'Content-Type': ctype(ext)
+    //})
+  //)
+}
+```Serve.prototype.logbook = function (ext) {
+  var q = this.query
+  var opts = {
+    reverse: !q.forwards,
+    //sortByTimestamp: q.sort === 'claimed',
+    sortByTimestamp: q.sort || 'claimed',
+    lt: Number(q.lt) || Date.now(),
+    gt: Number(q.gt) || -Infinity,
+    filter: q.filter,
+  }
+
+  logbook.getMessages(this.app.sbot, "logbook", this, function(messageStream, serve) {
+    pull(messageStream,
+	    serve.renderThreadPaginated(opts, null, q),
+	    serve.wrapMessages(),
+	    serve.wrapPublic(),
+	    serve.wrapPage('logbook'),
+	    serve.respondSink(200, {
+		    'Content-Type': ctype(ext)
+	    })
+	    //pull.drain(function(msg) {
+		    //console.log(JSON.stringify(msg));
+	    //})
+    )
+  }
+  , hops=3)
+
+	    //this.renderThreadPaginated(opts, null, q),
+	    //this.wrapMessages(),
+	    //this.wrapPublic(),
+	    //this.wrapPage('public'),
+	    //this.respondSink(200, {
+		    //'Content-Type': ctype(ext)
+	    //})
+    //)
+    //});
+
+  //pull(
+    //this.app.createLogStream(opts),
+    //pull.filter(msg => {
+      //return !msg.value.content.vote
+    //}),
+    //this.renderThreadPaginated(opts, null, q),
+    //this.wrapMessages(),
+    //this.wrapPublic(),
+    //this.wrapPage('public'),
+    //this.respondSink(200, {
+      //'Content-Type': ctype(ext)
+    //})
+  //)
+}

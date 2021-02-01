@@ -75,27 +75,8 @@ class StreamController {
 	}
 }
 
-function getFriendsSync(client, hops) {
-	debug("Fetching list of friends...");
-	var formattedFriends;
-	var intervalIterations = 1;
-
-	client.friends.hops({
-		dunbar: Number.MAX_SAFE_INTEGER,
-		max: hops
-	}, function(error, friends) {
-		if(error) {
-			throw "Couldn't get list of friends from scuttlebot: " + error;
-		}
-
-		formattedFriends = Object.keys(friends).map(id => id.toLowerCase());
-	});
-
-	return waitUntilDefined(formattedFriends); // since this has to be synchronous
-}
-
 module.exports = {
-	getMessages: function(client, channelName, cb, hops=1) {
+	getMessages: function(client, channelName, preserve, cb, hops=MAX_HOPS) {
 		client.friends.hops({
 			dunbar: Number.MAX_SAFE_INTEGER,
 			max: hops
@@ -105,12 +86,12 @@ module.exports = {
 			}
 
 			var followedIds = Object.keys(friends).map(id => id.toLowerCase());
-			getMessagesFrom(client, channelName, followedIds, cb);
+			getMessagesFrom(client, channelName, followedIds, preserve, cb);
 		});
 	}
 }
 
-function getMessagesFrom(client, channelName, followedIds, cb) {
+function getMessagesFrom(client, channelName, followedIds, preserve, cb) {
 	debug("Fetching messages from IDs in " + JSON.stringify(followedIds));
 
 	var channelTag = "#" + channelName;
@@ -135,7 +116,7 @@ function getMessagesFrom(client, channelName, followedIds, cb) {
 		streamController.finish();
 	}));
 
-	cb(streamController.outputStream);
+	cb(streamController.outputStream, preserve);
 }
 
 function createHashtagStream(client, channelName) {

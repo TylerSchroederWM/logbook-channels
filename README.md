@@ -14,8 +14,8 @@ const channels = require("./channels-lib");
 
 clientFactory(function(err, client) {
   if(err) throw err;
-  channel.getMessages(client, "logbook", function(messageStream) {
-    pull(messageStream, pull.drain(function(msg) {
+  channel.getMessages(client, "logbook", null, function(messageStream) {
+    pull(messageStream, pull.drain(function(msg, _) {
       console.log(JSON.stringify(msg));
     })
   });

@@ -162,4 +162,3 @@ function debug(message) {
 		console.log("[channels-lib] [" + timestamp.toISOString() + "] " +  message);
 	}
 }
-s

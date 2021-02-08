@@ -37,7 +37,7 @@ Serve.prototype.logbook2 = function (ext) {
     channel: channelName
   }
 
-  channels.getMessages(this.app.sbot, channelName, this, function(messageStream, serve) {
+  channels.getMessages(this.app.sbot, channelName, opts, this, function(messageStream, serve) {
     pull(messageStream,
 	    serve.renderThreadPaginated(opts, null, q),
 	    serve.wrapMessages(),

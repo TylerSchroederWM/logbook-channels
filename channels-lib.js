@@ -72,7 +72,7 @@ class StreamController {
 				this.streamData[datumIndex].oldestTimestampSeen = 0;
 			}
 			this.pushNewlySafeMessages();
-			this.outputStream.push();
+			this.outputStream.end);
 		}
 	}a
 }

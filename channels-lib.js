@@ -27,7 +27,8 @@ class StreamData {
 }
 
 class StreamController {
-	constructor(opts) {
+	constructor(client, opts) {
+		this.client = client,
 		this.outputStream = Pushable(),
 		this.streamData = {
 			channelStream: new StreamData(),
@@ -65,6 +66,7 @@ class StreamController {
 			for(var msgIndex in newlySafeMessages) {
 				debug("pushing safe message...");
 				this.outputStream.push(newlySafeMessages[msgIndex]);
+				this.requestBlobs(newlySafeMessages[msgIndex]);
 			}
 		},
 		this.finish = function() {
@@ -73,8 +75,25 @@ class StreamController {
 			}
 			this.pushNewlySafeMessages();
 			this.outputStream.end();
+		},
+		this.requestBlobs = function(msg) {
+			if(msg.value && msg.value.content && msg.value.content.mentions && msg.value.content.mentions.type && msg.value.content.mentions.link && msg.value.content.mentions.type.includes("image")) {
+				this.client.blobs.has(msg.value.content.mentions.link, function(err, has) {
+					if(err) {
+						debug("[ERROR] ssb.blobs.has failed on the following message: " + JSON.stringify(msg));
+					}
+					if(!err && !has) {
+						debug("Wanting blob with ID " + msg.value.content.mentions.link);
+						this.client.blobs.want(msg.value.content.mentions.link, {nowait: false}, function() {
+							this.client.blobs.get(msg.value.content.mentions.link, function() {
+								debug("Downloaded blob with ID " + msg.value.content.mentions.link);
+							});
+						});
+					}
+				});
+			}
 		}
-	}a
+	}
 }
 
 module.exports = {
@@ -97,7 +116,7 @@ function getMessagesFrom(client, channelName, followedIds, opts, preserve, cb) {
 	debug("Fetching messages from IDs in " + JSON.stringify(followedIds));
 
 	var channelTag = "#" + channelName;
-	var streamController = new StreamController(opts);
+	var streamController = new StreamController(client, opts);
 	var hashtagStream = createHashtagStream(client, channelName);
 	var channelStream = createChannelStream(client, channelName);
 	var stream = many([hashtagStream, channelStream]);

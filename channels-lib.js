@@ -71,18 +71,19 @@ class StreamController {
 			this.outputStream.end();
 		},
 		this.requestBlobs = function(msg) {
+			let client = this.client; // did the javascript devs ever consider that you might have a callback inside a member function? no? ok
 			if(msg.value && msg.value.content && msg.value.content.mentions) {
 				for(let mention of msg.value.content.mentions) {
 					if(mention.type && mention.link && mention.type.includes("image")) {
 						debug("Ensuring existence of blob with ID " + mention.link);
-						this.client.blobs.has(mention.link, function(err, has) {
+						client.blobs.has(mention.link, function(err, has) {
 							if(err) {
 								debug("[ERROR] ssb.blobs.has failed on the following message: " + JSON.stringify(msg));
 							}
 							if(!err && !has) {
 								debug("Wanting blob with ID " + mention.link);
-								this.client.blobs.want(mention.link, {nowait: false}, function() {
-									this.client.blobs.get(mention.link, function() {
+								client.blobs.want(mention.link, {nowait: false}, function() {
+									client.blobs.get(mention.link, function() {
 										debug("Downloaded blob with ID " + mention.link);
 									});
 								});

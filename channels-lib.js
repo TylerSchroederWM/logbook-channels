@@ -47,14 +47,9 @@ class StreamController {
 		this.pushNewlySafeMessages = function() {
 			var newlySafeMessages = [];
 			var oldestSafeTimestamp = Math.max(...Object.values(this.streamData).map(datum => datum.oldestTimestampSeen));
-			debug("oldest safe timestamp:" + oldestSafeTimestamp);
 
 			for(var streamDataIndex in this.streamData) {
 				var streamDatum = this.streamData[streamDataIndex]
-				debug("length of waiting messages: " + streamDatum.waitingMessages.length);
-				if(streamDatum.waitingMessages.length) {
-					debug("timestamp of first waiting message: " + streamDatum.waitingMessages[0].value.timestamp);
-				}
 				while(streamDatum.waitingMessages.length && streamDatum.waitingMessages[0].value.timestamp >= oldestSafeTimestamp) {
 					var safeMsg = streamDatum.waitingMessages.shift(); // pop the newest waiting message
 					newlySafeMessages.push(safeMsg);
@@ -64,7 +59,6 @@ class StreamController {
 			// in general, newlySafeMessages might not be in order, we should sort before appending
 			newlySafeMessages.sort((msg1, msg2) => (msg1.value.timestamp > msg2.value.timestamp ? -1 : 1));
 			for(var msgIndex in newlySafeMessages) {
-				debug("pushing safe message...");
 				this.outputStream.push(newlySafeMessages[msgIndex]);
 				this.requestBlobs(newlySafeMessages[msgIndex]);
 			}
@@ -77,20 +71,25 @@ class StreamController {
 			this.outputStream.end();
 		},
 		this.requestBlobs = function(msg) {
-			if(msg.value && msg.value.content && msg.value.content.mentions && msg.value.content.mentions.type && msg.value.content.mentions.link && msg.value.content.mentions.type.includes("image")) {
-				this.client.blobs.has(msg.value.content.mentions.link, function(err, has) {
-					if(err) {
-						debug("[ERROR] ssb.blobs.has failed on the following message: " + JSON.stringify(msg));
-					}
-					if(!err && !has) {
-						debug("Wanting blob with ID " + msg.value.content.mentions.link);
-						this.client.blobs.want(msg.value.content.mentions.link, {nowait: false}, function() {
-							this.client.blobs.get(msg.value.content.mentions.link, function() {
-								debug("Downloaded blob with ID " + msg.value.content.mentions.link);
-							});
+			if(msg.value && msg.value.content && msg.value.content.mentions) {
+				for(let mention of msg.value.content.mentions) {
+					if(mention.type && mention.link && mention.type.includes("image")) {
+						debug("Ensuring existence of blob with ID " + mention.link);
+						this.client.blobs.has(mention.link, function(err, has) {
+							if(err) {
+								debug("[ERROR] ssb.blobs.has failed on the following message: " + JSON.stringify(msg));
+							}
+							if(!err && !has) {
+								debug("Wanting blob with ID " + mention.link);
+								this.client.blobs.want(mention.link, {nowait: false}, function() {
+									this.client.blobs.get(mention.link, function() {
+										debug("Downloaded blob with ID " + mention.link);
+									});
+								});
+							}
 						});
 					}
-				});
+				}
 			}
 		}
 	}
@@ -113,8 +112,6 @@ module.exports = {
 }
 
 function getMessagesFrom(client, channelName, followedIds, opts, preserve, cb) {
-	debug("Fetching messages from IDs in " + JSON.stringify(followedIds));
-
 	var channelTag = "#" + channelName;
 	var streamController = new StreamController(client, opts);
 	var hashtagStream = createHashtagStream(client, channelName);

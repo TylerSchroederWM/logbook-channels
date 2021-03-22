@@ -1,17 +1,20 @@
 var pull = require("pull-stream");
 var Pushable = require("pull-pushable");
 var many = require("./pull-many-v2");
+const fs = require("fs");
+const home = require("os").homedir();
+const path = require("path");
 
 // Change to 'true' to get debugging output
 DEBUG = false
 
-DEFAULT_CHANNEL_OBJECT = {
-	messages: []
-}
-DEFAULT_CHANNEL_OBJECT_SIZE = 15
 FRIENDS_POLL_TIME = 1 // ms
 GRAPH_TYPE = "follow"
 MAX_HOPS = 1
+
+SBOT_ROOT = path.join(home, ".ssb");
+SBOT_BLOB_DIR = path.join(SBOT_ROOT, "blobs");
+SBOT_BLOBS_FILE = path.join(SBOT_BLOB_DIR, "allowed_blobs");
 
 class StreamData {
 	constructor() {
@@ -30,6 +33,7 @@ class StreamController {
 	constructor(client, opts) {
 		this.client = client,
 		this.outputStream = Pushable(),
+		this.allowedBlobs = [],
 		this.streamData = {
 			channelStream: new StreamData(),
 			hashtagStream: new StreamData(),
@@ -68,36 +72,51 @@ class StreamController {
 				this.streamData[datumIndex].oldestTimestampSeen = 0;
 			}
 			this.pushNewlySafeMessages();
+
+			fs.writeFile(SBOT_BLOBS_FILE, this.allowedBlobs.join("\n"), function(err) {
+				debug("Failed to write allowed blobs to file: \n" + err);
+			});
+
 			this.outputStream.end();
 		},
 		this.requestBlobs = function(msg) {
 			let client = this.client; // did the javascript devs ever consider that you might have a callback inside a member function? no? ok
-			if(msg.value && msg.value.content && msg.value.content.mentions) {
-				for(let mention of msg.value.content.mentions) {
-					if(mention.type && mention.link && mention.type.includes("image")) {
-						debug("Ensuring existence of blob with ID " + mention.link);
-						client.blobs.has(mention.link, function(err, has) {
-							if(err) {
-								debug("[ERROR] ssb.blobs.has failed on the following message: " + JSON.stringify(msg));
-							}
-							if(!err && !has) {
-								debug("Wanting blob with ID " + mention.link);
-								client.blobs.want(mention.link, {nowait: false}, function() {
-									client.blobs.get(mention.link, function() {
-										debug("Downloaded blob with ID " + mention.link);
-									});
-								});
-							}
-						});
+			if(msg.value && msg.value.content) {
+				if(msg.value.content.mentions) {
+					for(let mention of msg.value.content.mentions) {
+						if(mention.type && mention.link) {
+							this.getBlob(mention.link)
+						}
 					}
 				}
+
+				if(msg.value.content.image) {
+					this.getBlob(msg.value.content.image);
+				}
 			}
+		}
+		this.getBlob = function(blobId) {
+			this.allowedBlobs.push(blobId);
+
+			debug("Ensuring existence of blob with ID " + blobId);
+			client.blobs.has(blobId, function(err, has) {
+				if(err) {
+					debug("[ERROR] ssb.blobs.has failed on the blob with ID " + blobId);
+				}
+				if(!err && !has) {
+					debug("Wanting blob with ID " + blobId);
+					client.blobs.want(blobId, function() {
+						debug("Downloaded blob with ID " + blobId);
+					});
+				}
+			});
 		}
 	}
 }
 
 module.exports = {
 	getMessages: function(client, channelName, opts, preserve, cb, hops=MAX_HOPS) {
+		ensureFiles();
 		client.friends.hops({
 			dunbar: Number.MAX_SAFE_INTEGER,
 			max: hops
@@ -171,6 +190,23 @@ function createChannelStream(client, channelName, opts) {
 	query.streamName = "channel"; // mark the stream object so we can tell which stream a message came from later
 
 	return query;
+}
+
+function ensureFiles() {
+	if (!fs.existsSync(SBOT_ROOT)) {
+		debug("no ~/.ssb folder detected, creating it...");
+		fs.mkdirSync(SBOT_ROOT);
+	}
+
+	if (!fs.existsSync(SBOT_BLOB_DIR)) {
+		debug("no blobs folder detected, creating it...");
+		fs.mkdirSync(SBOT_BLOB_DIR);
+	}
+
+	if (!fs.existsSync(SBOT_BLOBS_FILE)) {
+		debug("no metadata file found, creating it...");
+		fs.writeFileSync(SBOT_BLOBS_FILE, "");
+	}
 }
 
 function debug(message) {

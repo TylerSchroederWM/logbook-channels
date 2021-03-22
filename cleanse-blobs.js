@@ -15,7 +15,7 @@ SBOT_BLOBS_FILE = path.join(SBOT_BLOB_DIR, "allowed_blobs");
 
 function getPermittedBlobIds() {
 	let contents = fs.readFileSync(SBOT_BLOBS_FILE, "utf8");
-	return contents.split("/\r?\n/"); // this could cause slowdowns if the metadata file is several gigabytes, but i don't forsee that happening
+	return contents.split("\n"); // this could cause slowdowns if the metadata file is several gigabytes, but i don't forsee that happening
 }
 
 function ensureFiles() {

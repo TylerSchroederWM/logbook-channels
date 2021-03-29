@@ -39,10 +39,11 @@ class StreamController {
 		this.streamData = {
 			channelStream: new StreamData(),
 			hashtagStream: new StreamData(),
+			metadataStream: new StreamData()
 		},
 
 		this.pushMessage = function(source, newMsg) {
-			var streamData = source == "hashtag" ? this.streamData.hashtagStream : this.streamData.channelStream;
+			var streamData = source == "hashtag" ? this.streamData.hashtagStream : source == "channel" ? this.streamData.channelStream : this.streamData.metadataStream;
 			streamData.oldestTimestampSeen = newMsg.value.timestamp;
 			if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
 				streamData.waitingMessages.push(newMsg);
@@ -75,9 +76,9 @@ class StreamController {
 			}
 			this.pushNewlySafeMessages();
 
-			this.deleteUnrelatedBlobs();
-
 			this.outputStream.end();
+			
+			this.deleteUnrelatedBlobs();
 		},
 		this.requestBlobs = function(msg) {
 			let client = this.client; // did the javascript devs ever consider that you might have a callback inside a member function? no? ok
@@ -120,6 +121,8 @@ class StreamController {
 					client.blobs.rm(id, function () {
 						debug("Removed blob with ID " + id);
 					});
+				}, function() {
+					process.exit(0);
 				})
 			);
 		}
@@ -133,7 +136,7 @@ function debug(message) {
 	}
 }
 
-function createHashtagStream(client, channelName, opts) {
+function createHashtagStream(client, channelName) {
 	var search = client.search && client.search.query;
         if(!search) {
                 console.log("[FATAL] ssb-search plugin must be installed to us channels");
@@ -149,7 +152,7 @@ function createHashtagStream(client, channelName, opts) {
 	return query;
 }
 
-function createChannelStream(client, channelName, opts) {
+function createChannelStream(client, channelName) {
 	var query = client.query.read({
 		query: [{
                        	"$filter": {
@@ -168,12 +171,32 @@ function createChannelStream(client, channelName, opts) {
 	return query;
 }
 
+function createMetadataStream(client) {
+	var query = client.query.read({
+		query: [{
+                       	"$filter": {
+                               	value: {
+                                       	content: {
+                                               	type: "about"
+                                        	}
+                        		}
+       	        	}
+                }],
+               reverse: true
+	});
+
+	query.streamName = "metadata"; // mark the stream object so we can tell which stream a message came from later
+
+	return query;
+}
+
 function getMessagesFrom(client, channelName, followedIds, opts, cb) {
 	var channelTag = "#" + channelName;
 	var streamController = new StreamController(client, opts);
 	var hashtagStream = createHashtagStream(client, channelName);
 	var channelStream = createChannelStream(client, channelName);
-	var stream = many([hashtagStream, channelStream]);
+	var metadataStream = createMetadataStream(client);
+	var stream = many([hashtagStream, channelStream, metadataStream]);
 
 	pull(stream, pull.filter(function(msg) {
 		return followedIds.includes(msg.data.value.author.toLowerCase());
@@ -183,7 +206,7 @@ function getMessagesFrom(client, channelName, followedIds, opts, cb) {
 			return hasHashtag;
 		}
 		else {
-			return !hasHashtag; // prevents us from double-counting messages with both the hashtag and the channel header
+			return !hasHashtag; // prevents us from double-counting messages with both the hashtag and the channel header (don't need to worry about 'about' messages since they never have text fields [if you're reading this because you found an 'about' message with a text field then please murder the person resposible])
 		}
 	}), pull.drain(function(msg) {
 		streamController.pushMessage(msg.source, msg.data);

@@ -5,7 +5,7 @@ var Pushable = require("pull-pushable");
 var many = require("./pull-many-v2");
 
 // Change to 'true' to get debugging output
-DEBUG = !false
+DEBUG = false
 
 // Change to switch the default monitored channel
 DEFAULT_CHANNEL_NAME = "logbook"
@@ -15,7 +15,7 @@ DEFAULT_OPTS = {
 	gt: -Infinity
 }
 GRAPH_TYPE = "follow"
-MAX_HOPS = 3
+MAX_HOPS = 1
 
 
 class StreamData {
@@ -36,6 +36,7 @@ class StreamController {
 		this.client = client,
 		this.outputStream = Pushable(),
 		this.allowedBlobs = [],
+		this.idsInMainChannel = [],
 		this.streamData = {
 			channelStream: new StreamData(),
 			hashtagStream: new StreamData(),
@@ -45,9 +46,17 @@ class StreamController {
 		this.pushMessage = function(source, newMsg) {
 			var streamData = source == "hashtag" ? this.streamData.hashtagStream : source == "channel" ? this.streamData.channelStream : this.streamData.metadataStream;
 			streamData.oldestTimestampSeen = newMsg.value.timestamp;
-			if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
-				streamData.waitingMessages.push(newMsg);
+
+			if(source == "hashtag" || source == "channel") { // will ensure that we only fetch profile pictures for authors who actually show up in #logbook
+				if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
+					this.idsInMainChannel.push(newMsg.value.author.toLowerCase());
+					streamData.waitingMessages.push(newMsg);
+				}
 			}
+			else if(source == "metadata" && this.idsInMainChannel.includes(newMsg.value.author.toLowerCase())) {
+				this.requestBlobs(newMsg);
+			}
+			
 
 			this.pushNewlySafeMessages();
 		},
@@ -91,10 +100,18 @@ class StreamController {
 					}
 				}
 
-				if(msg.value.content.image) {
-					this.getBlob(msg.value.content.image);
+				if(this.idsInMainChannel.includes(msg.value.author.toLowerCase())) {
+					if(msg.value.content.image) {
+						if(typeof msg.value.content.image == "string") {
+							this.getBlob(msg.value.content.image);
+						}
+						else if(typeof msg.value.content.image == "object" && typeof msg.value.content.image.link == "string") {
+							this.getBlob(msg.value.content.image.link);
+						}
+					}
 				}
 			}
+
 		},
 		this.getBlob = function(blobId) {
 			this.allowedBlobs.push(blobId);

@@ -56,7 +56,6 @@ class StreamController {
 			else if(source == "metadata" && this.idsInMainChannel.includes(newMsg.value.author.toLowerCase())) {
 				this.requestBlobs(newMsg);
 			}
-			
 
 			this.pushNewlySafeMessages();
 		},
@@ -86,16 +85,21 @@ class StreamController {
 			this.pushNewlySafeMessages();
 
 			this.outputStream.end();
-			
+
 			this.deleteUnrelatedBlobs();
 		},
 		this.requestBlobs = function(msg) {
 			let client = this.client; // did the javascript devs ever consider that you might have a callback inside a member function? no? ok
 			if(msg.value && msg.value.content) {
-				if(msg.value.content.mentions) {
+				if(msg.value.content.mentions && Symbol.iterator in Object(msg.value.content.mentions)) {
 					for(let mention of msg.value.content.mentions) {
 						if(mention.type && mention.link) {
-							this.getBlob(mention.link)
+							if(typeof mention.link == "string") {
+								this.getBlob(mention.link)
+							}
+							else {
+								debug("Message has non-string mention.link value: " + JSON.stringify(mention.link));
+							}
 						}
 					}
 				}
@@ -107,6 +111,9 @@ class StreamController {
 						}
 						else if(typeof msg.value.content.image == "object" && typeof msg.value.content.image.link == "string") {
 							this.getBlob(msg.value.content.image.link);
+						}
+						else {
+							debug("Message has unknown msg.value.content.image value: " + JSON.stringify(msg.value.content.image));
 						}
 					}
 				}

@@ -1,5 +1,6 @@
 var argv = require("minimist")(process.argv.slice(2));
 var clientFactory = require("ssb-client");
+var config = require("ssb-config");
 var pull = require("pull-stream");
 var Pushable = require("pull-pushable");
 var many = require("./pull-many-v2");
@@ -86,7 +87,13 @@ class StreamController {
 
 			this.outputStream.end();
 
-			this.deleteUnrelatedBlobs();
+			if(argv.d) {
+				debug("delete flag detected, cleansing unrelated blobs...");
+				this.deleteUnrelatedBlobs();
+			}
+			else {
+				process.exit(0);
+			}
 		},
 		this.requestBlobs = function(msg) {
 			let client = this.client; // did the javascript devs ever consider that you might have a callback inside a member function? no? ok
@@ -255,9 +262,20 @@ function main(client, channelName, opts, cb, hops=MAX_HOPS) {
 	});
 }
 
-clientFactory(function(err, client) {
+function getConfig() {
+	return {
+		host: config.connections.incoming.net.external || "localhost",
+		port: config.connections.incoming.net.port || 8008
+	}
+}
+
+clientFactory(getConfig(), function(err, client) {
 	if(err) {
 		console.log("[ERROR] Failed to open ssb-client: " + err);
+	}
+
+	if(argv["delete"] || argv["del"]) {
+		argv.d = true;
 	}
 	main(client, argv._[0] || DEFAULT_CHANNEL_NAME, DEFAULT_OPTS, () => {});
 });

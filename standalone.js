@@ -37,25 +37,19 @@ class StreamController {
 		this.client = client,
 		this.outputStream = Pushable(),
 		this.allowedBlobs = [],
-		this.idsInMainChannel = [],
+		this.idsInMainChannel = {},
 		this.streamData = {
 			channelStream: new StreamData(),
-			hashtagStream: new StreamData(),
-			metadataStream: new StreamData()
+			hashtagStream: new StreamData()
 		},
 
 		this.pushMessage = function(source, newMsg) {
-			var streamData = source == "hashtag" ? this.streamData.hashtagStream : source == "channel" ? this.streamData.channelStream : this.streamData.metadataStream;
+			var streamData = source == "hashtag" ? this.streamData.hashtagStream : this.streamData.channelStream;
 			streamData.oldestTimestampSeen = newMsg.value.timestamp;
 
-			if(source == "hashtag" || source == "channel") { // will ensure that we only fetch profile pictures for authors who actually show up in #logbook
-				if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
-					this.idsInMainChannel.push(newMsg.value.author.toLowerCase());
-					streamData.waitingMessages.push(newMsg);
-				}
-			}
-			else if(source == "metadata" && this.idsInMainChannel.includes(newMsg.value.author.toLowerCase())) {
-				this.requestBlobs(newMsg);
+			if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
+				this.idsInMainChannel[newMsg.value.author] = true;
+				streamData.waitingMessages.push(newMsg);
 			}
 
 			this.pushNewlySafeMessages();
@@ -79,14 +73,17 @@ class StreamController {
 				this.requestBlobs(newlySafeMessages[msgIndex]);
 			}
 		},
-		this.finish = function() {
+		this.startExit = function() {
 			for(var datumIndex in this.streamData) {
 				this.streamData[datumIndex].oldestTimestampSeen = 0;
 			}
 			this.pushNewlySafeMessages();
 
+			this.getRelevantProfilePictures();
+		},
+		this.finishExit = function() { // is called at the end of getRelevantProfilePictures
 			this.outputStream.end();
-
+			
 			if(argv.d) {
 				debug("delete flag detected, cleansing unrelated blobs...");
 				this.deleteUnrelatedBlobs();
@@ -110,22 +107,46 @@ class StreamController {
 						}
 					}
 				}
+			}
 
-				if(this.idsInMainChannel.includes(msg.value.author.toLowerCase())) {
-					if(msg.value.content.image) {
+		},
+		this.getRelevantProfilePictures = function() {
+			let javascriptSucksTheChromeOffOfDoorknobs = this;
+
+			let relevantIds = Object.keys(this.idsInMainChannel);
+			let profilePictureStreams = []
+			let profilePictureFound = {};
+			for(let userId of relevantIds) {
+				profilePictureFound[userId] = false;
+				profilePictureStreams.push(createMetadataStream(this.client, userId));
+			}
+			let collectedStream = many(profilePictureStreams);
+			
+			if(relevantIds.length == 0) { // avoid the edge case where checkIfDone is never called
+				this.finishExit()
+			}
+			
+			pull(
+				collectedStream,
+				pull.drain(function(item) {
+					let msg = item.data;
+					if(!profilePictureFound[item.source] && msg.value.content.image) { // the source of an item is the userId of the stream that item came from
 						if(typeof msg.value.content.image == "string") {
-							this.getBlob(msg.value.content.image);
+							javascriptSucksTheChromeOffOfDoorknobs.getBlob(msg.value.content.image);
+							profilePictureFound[item.source] = true;
 						}
 						else if(typeof msg.value.content.image == "object" && typeof msg.value.content.image.link == "string") {
-							this.getBlob(msg.value.content.image.link);
+							javascriptSucksTheChromeOffOfDoorknobs.getBlob(msg.value.content.image.link);
+							profilePictureFound[item.source] = true;
 						}
 						else {
 							debug("Message has unknown msg.value.content.image value: " + JSON.stringify(msg.value.content.image));
 						}
 					}
-				}
-			}
-
+				}, function() {
+					javascriptSucksTheChromeOffOfDoorknobs.finishExit();
+				})
+			);
 		},
 		this.getBlob = function(blobId) {
 			this.allowedBlobs.push(blobId);
@@ -202,21 +223,21 @@ function createChannelStream(client, channelName) {
 	return query;
 }
 
-function createMetadataStream(client) {
+function createMetadataStream(client, userId) {
 	var query = client.query.read({
 		query: [{
                        	"$filter": {
                                	value: {
+                               		author: userId,
                                        	content: {
                                                	type: "about"
                                         	}
                         		}
        	        	}
-                }],
-               reverse: true
+                }]
 	});
 
-	query.streamName = "metadata"; // mark the stream object so we can tell which stream a message came from later
+	query.streamName = userId; // mark the stream object so we can tell which stream a message came from later
 
 	return query;
 }
@@ -226,8 +247,7 @@ function getMessagesFrom(client, channelName, followedIds, opts, cb) {
 	var streamController = new StreamController(client, opts);
 	var hashtagStream = createHashtagStream(client, channelName);
 	var channelStream = createChannelStream(client, channelName);
-	var metadataStream = createMetadataStream(client);
-	var stream = many([hashtagStream, channelStream, metadataStream]);
+	var stream = many([hashtagStream, channelStream]);
 
 	pull(stream, pull.filter(function(msg) {
 		return followedIds.includes(msg.data.value.author.toLowerCase());
@@ -237,12 +257,12 @@ function getMessagesFrom(client, channelName, followedIds, opts, cb) {
 			return hasHashtag;
 		}
 		else {
-			return !hasHashtag; // prevents us from double-counting messages with both the hashtag and the channel header (don't need to worry about 'about' messages since they never have text fields [if you're reading this because you found an 'about' message with a text field then please murder the person resposible])
+			return !hasHashtag; // prevents us from double-counting messages with both the hashtag and the channel header (don't need to worry about 'about' messages since they never have text fields)
 		}
 	}), pull.drain(function(msg) {
 		streamController.pushMessage(msg.source, msg.data);
 	}, function() {
-		streamController.finish();
+		streamController.startExit();
 	}));
 
 	cb(streamController.outputStream);

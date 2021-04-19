@@ -132,10 +132,12 @@ class StreamController {
 					let msg = item.data;
 					if(!profilePictureFound[item.source] && msg.value.content.image) { // the source of an item is the userId of the stream that item came from
 						if(typeof msg.value.content.image == "string") {
+							debug("Getting profile picture at " + msg.value.content.image + " for user " + item.source);
 							javascriptSucksTheChromeOffOfDoorknobs.getBlob(msg.value.content.image);
 							profilePictureFound[item.source] = true;
 						}
 						else if(typeof msg.value.content.image == "object" && typeof msg.value.content.image.link == "string") {
+							debug("Getting profile picture at " + msg.value.content.image.link + " for user " + item.source);
 							javascriptSucksTheChromeOffOfDoorknobs.getBlob(msg.value.content.image.link);
 							profilePictureFound[item.source] = true;
 						}

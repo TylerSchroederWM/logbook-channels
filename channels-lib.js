@@ -1,9 +1,6 @@
 var pull = require("pull-stream");
 var Pushable = require("pull-pushable");
 var many = require("./pull-many-v2");
-const fs = require("fs");
-const home = require("os").homedir();
-const path = require("path");
 
 // Change to 'true' to get debugging output
 DEBUG = false
@@ -11,10 +8,6 @@ DEBUG = false
 FRIENDS_POLL_TIME = 1 // ms
 GRAPH_TYPE = "follow"
 MAX_HOPS = 1
-
-SBOT_ROOT = path.join(home, ".ssb");
-SBOT_BLOB_DIR = path.join(SBOT_ROOT, "blobs");
-SBOT_BLOBS_FILE = path.join(SBOT_BLOB_DIR, "allowed_blobs");
 
 class StreamData {
 	constructor() {
@@ -33,7 +26,6 @@ class StreamController {
 	constructor(client, opts) {
 		this.client = client,
 		this.outputStream = Pushable(),
-		this.allowedBlobs = [],
 		this.streamData = {
 			channelStream: new StreamData(),
 			hashtagStream: new StreamData(),
@@ -73,10 +65,6 @@ class StreamController {
 			}
 			this.pushNewlySafeMessages();
 
-			fs.writeFile(SBOT_BLOBS_FILE, this.allowedBlobs.join("\n"), function(err) {
-				debug("Failed to write allowed blobs to file: \n" + err);
-			});
-
 			this.outputStream.end();
 		},
 		this.requestBlobs = function(msg) {
@@ -96,8 +84,6 @@ class StreamController {
 			}
 		}
 		this.getBlob = function(blobId) {
-			this.allowedBlobs.push(blobId);
-
 			debug("Ensuring existence of blob with ID " + blobId);
 			client.blobs.has(blobId, function(err, has) {
 				if(err) {
@@ -190,23 +176,6 @@ function createChannelStream(client, channelName, opts) {
 	query.streamName = "channel"; // mark the stream object so we can tell which stream a message came from later
 
 	return query;
-}
-
-function ensureFiles() {
-	if (!fs.existsSync(SBOT_ROOT)) {
-		debug("no ~/.ssb folder detected, creating it...");
-		fs.mkdirSync(SBOT_ROOT);
-	}
-
-	if (!fs.existsSync(SBOT_BLOB_DIR)) {
-		debug("no blobs folder detected, creating it...");
-		fs.mkdirSync(SBOT_BLOB_DIR);
-	}
-
-	if (!fs.existsSync(SBOT_BLOBS_FILE)) {
-		debug("no metadata file found, creating it...");
-		fs.writeFileSync(SBOT_BLOBS_FILE, "");
-	}
 }
 
 function debug(message) {

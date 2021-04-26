@@ -102,7 +102,6 @@ class StreamController {
 
 module.exports = {
 	getMessages: function(client, channelName, opts, preserve, cb, hops=MAX_HOPS) {
-		ensureFiles();
 		client.friends.hops({
 			dunbar: Number.MAX_SAFE_INTEGER,
 			max: hops

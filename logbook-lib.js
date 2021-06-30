@@ -42,43 +42,32 @@ function sortAndPushAllMessages() {
 	}
 }
 
-function getReplies(unchckedMessages, recursionCount) {
-	if(recursionCount == MAX_REPLY_RECURSIONS) {
-		debug("Maximum recursions reached for reply chain; continuing to fetch profile pictures...\n Messages with unchecked replies start with: \n" + uncheckedMessages);
-		sortAndPushAllMessages();
-		getRelevantProfilePictures();
-	}
-	
+function getReplies(unchckedMessages) {
 	let replyStreams = [];
-	
+
 	for(userId of Object.entries(idsInMainChannel)) {
 		messagesByUser[userId] = [];
 		replyStreams.push(createUserStream(client, userId));
 	}
-	
+
 	let newMessages = {};
 	let foundNewMessages = false;
 	pull(
 		many(replyStreams),
 		pull.filter(function(msg) {
 			userMessages[msg.value.author].push(msg);
-			let messageIsValid = (value in msg) && (content in msg.value) && (link in msg.value.content);
-			return messageIsValid && !(msg.key in uncheckedMessages) && (msg.value.content.link in uncheckedMessages);
+			let messageIsValid = (value in msg) && (content in msg.value) && (root in msg.value.content);
+			return messageIsValid && !(msg.key in uncheckedMessages) && (msg.value.content.root in uncheckedMessages);
 		}),
 		pull.drain(function(msg) {
 			pushMessage(msg);
-			
+
 			newMessages[msg.key] = msg;
 			foundNewMessages = true;
 		},
 		function() {
-			if(!foundNewMessages) {
-				sortAndPushAllMessages();
-				getRelevantProfilePictures();
-			}
-			else {
-				getReplies(newMessages, recursionCount + 1);
-			}
+			sortAndPushAllMessages();
+			getRelevantProfilePictures();
 		})
 	);
 }
@@ -104,17 +93,17 @@ function getRelevantProfilePictures() {
 	let relevantIds = Object.keys(idsInMainChannel);
 	let profilePictureStreams = []
 	let profilePictureFound = {};
-	
+
 	for(let userId of relevantIds) {
 		profilePictureFound[userId] = false;
 		profilePictureStreams.push(createMetadataStream(client, userId));
 	}
 	let collectedStream = many(profilePictureStreams);
-			
+
 	if(relevantIds.length == 0) { // avoid the edge case where checkIfDone is never called
 		exit();
 	}
-			
+
 	pull(
 		collectedStream,
 		pull.drain(function(msg) {
@@ -155,7 +144,7 @@ function getBlob(blobId) {
 }
 
 function exit() { // is called at the end of the getReplies -> getRelevantProfilePictures chain
-	outputStream.end();	
+	outputStream.end();
 }
 
 function debug(message) {
@@ -241,7 +230,7 @@ function getMessagesFrom(channelName, followedIds, preserve, cb) {
 	}), pull.drain(function(msg) {
 		pushMessage(msg);
 	}, function() {
-		getReplies(allMessages, 0);
+		getReplies(allMessages);
 	}));
 
 	cb(outputStream, preserve);
@@ -258,7 +247,7 @@ module.exports = {
 	getMessages: function(ssbClient, channelName, ssbOpts, preserve, cb, hops=MAX_HOPS) {
 		client = ssbClient; // set global variables
 		opts = ssbOpts;
-		
+
 		client.friends.hops({
 			dunbar: Number.MAX_SAFE_INTEGER,
 			max: hops
@@ -272,4 +261,3 @@ module.exports = {
 		});
 	}
 }
-

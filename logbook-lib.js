@@ -5,7 +5,7 @@ var Pushable = require("pull-pushable");
 var many = require("pull-many");
 
 // Change to 'true' to get debugging output
-DEBUG = false
+DEBUG = !false
 
 // Change to switch the default monitored channel
 DEFAULT_CHANNEL_NAME = "logbook"
@@ -39,7 +39,9 @@ function sortAndPushAllMessages() {
 	let messages = Object.keys(allMessages).map(function(msgId) { return allMessages[msgId]; });
 	for(let msg of messages.sort((a, b) => b.value.timestamp - a.value.timestamp)) {
 		outputStream.push(msg);
+		debug(msg.key);
 	}
+	exit()
 }
 
 function getReplies(unchckedMessages) {
@@ -101,7 +103,7 @@ function getRelevantProfilePictures() {
 	let collectedStream = many(profilePictureStreams);
 
 	if(relevantIds.length == 0) { // avoid the edge case where checkIfDone is never called
-		exit();
+		return;
 	}
 
 	pull(
@@ -122,8 +124,6 @@ function getRelevantProfilePictures() {
 					debug("Message has unknown msg.value.content.image value: " + JSON.stringify(msg.value.content.image));
 				}
 			}
-		}, function() {
-			exit();
 		})
 	);
 }
@@ -144,6 +144,7 @@ function getBlob(blobId) {
 }
 
 function exit() { // is called at the end of the getReplies -> getRelevantProfilePictures chain
+	debug("exiting...")
 	outputStream.end();
 }
 
@@ -224,6 +225,8 @@ function getMessagesFrom(channelName, followedIds, preserve, cb) {
 	var hashtagStream = createHashtagStream(client, channelName);
 	var channelStream = createChannelStream(client, channelName);
 	var stream = many([hashtagStream, channelStream]);
+
+	outputStream = Pushable(); // have to create a new outputStream every time, or all calls to getMessages after the first will return the already empty outputStream, causing patchfoo to return no messages
 
 	pull(stream, pull.filter(function(msg) {
 		return followedIds.includes(msg.value.author.toLowerCase());

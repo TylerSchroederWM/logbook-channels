@@ -44,7 +44,7 @@ function sortAndPushAllMessages() {
 	exit()
 }
 
-function getReplies(unchckedMessages) {
+function getReplies(rootMessages) {
 	let replyStreams = [];
 
 	for(userId of Object.entries(idsInMainChannel)) {
@@ -52,20 +52,15 @@ function getReplies(unchckedMessages) {
 		replyStreams.push(createUserStream(client, userId));
 	}
 
-	let newMessages = {};
-	let foundNewMessages = false;
 	pull(
 		many(replyStreams),
 		pull.filter(function(msg) {
 			userMessages[msg.value.author].push(msg);
 			let messageIsValid = (value in msg) && (content in msg.value) && (root in msg.value.content);
-			return messageIsValid && !(msg.key in uncheckedMessages) && (msg.value.content.root in uncheckedMessages);
+			return messageIsValid && !(rootMessages.includes(msg.key)) && (rootMessages.includes(msg.value.content.root));
 		}),
 		pull.drain(function(msg) {
 			pushMessage(msg);
-
-			newMessages[msg.key] = msg;
-			foundNewMessages = true;
 		},
 		function() {
 			sortAndPushAllMessages();
@@ -103,6 +98,7 @@ function getRelevantProfilePictures() {
 	let collectedStream = many(profilePictureStreams);
 
 	if(relevantIds.length == 0) { // avoid the edge case where checkIfDone is never called
+		// exit(cb, preserve);
 		return;
 	}
 
@@ -233,7 +229,9 @@ function getMessagesFrom(channelName, followedIds, preserve, cb) {
 	}), pull.drain(function(msg) {
 		pushMessage(msg);
 	}, function() {
-		getReplies(allMessages);
+		getReplies(Object.keys(allMessages).map(function(msg) {
+			return msg.key;
+		}));
 	}));
 
 	cb(outputStream, preserve);

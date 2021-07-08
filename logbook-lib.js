@@ -218,9 +218,7 @@ function getMessagesFrom(channelName, followedIds, preserve, cb) {
 	}), pull.drain(function(msg) {
 		pushMessage(msg);
 	}, function() {
-		getReplies(Object.keys(allMessages).map(function(msg) {
-			return msg.key;
-		}));
+		getReplies(Object.keys(allMessages));
 	}));
 
 	cb(outputStream, preserve);

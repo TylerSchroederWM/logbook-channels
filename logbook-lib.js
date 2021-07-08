@@ -24,7 +24,6 @@ let outputStream = Pushable();
 let allowedBlobs = [];
 let idsInMainChannel = {};
 let allMessages = {};
-let messagesByUser = {};
 let opts = DEFAULT_OPTS;
 
 function pushMessage(newMsg) {
@@ -39,7 +38,6 @@ function sortAndPushAllMessages() {
 	let messages = Object.keys(allMessages).map(function(msgId) { return allMessages[msgId]; });
 	for(let msg of messages.sort((a, b) => b.value.timestamp - a.value.timestamp)) {
 		outputStream.push(msg);
-		debug(msg.key);
 	}
 	exit()
 }
@@ -47,16 +45,14 @@ function sortAndPushAllMessages() {
 function getReplies(rootMessages) {
 	let replyStreams = [];
 
-	for(userId of Object.entries(idsInMainChannel)) {
-		messagesByUser[userId] = [];
+	for(userId of Object.keys(idsInMainChannel)) {
 		replyStreams.push(createUserStream(client, userId));
 	}
 
 	pull(
 		many(replyStreams),
 		pull.filter(function(msg) {
-			userMessages[msg.value.author].push(msg);
-			let messageIsValid = (value in msg) && (content in msg.value) && (root in msg.value.content);
+			let messageIsValid = msg.value && msg.value.content && msg.value.content.root;
 			return messageIsValid && !(rootMessages.includes(msg.key)) && (rootMessages.includes(msg.value.content.root));
 		}),
 		pull.drain(function(msg) {
@@ -183,15 +179,8 @@ function createChannelStream(client, channelName) {
 }
 
 function createUserStream(client, userId) {
-	var query = client.query.read({
-		query: [{
-                       	"$filter": {
-                               	value: {
-                                       	author: userId
-                        		}
-       	        	}
-                }],
-               reverse: true
+	var query = client.createUserStream({
+		id: userId
 	});
 
 	return query;

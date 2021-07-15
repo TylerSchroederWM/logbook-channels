@@ -7,9 +7,6 @@ var many = require("pull-many");
 // Change to 'true' to get debugging output
 DEBUG = !false
 
-// Change to switch the default monitored channel
-DEFAULT_CHANNEL_NAME = "logbook"
-
 DEFAULT_OPTS = {
 	lt: Date.now(),
 	gt: -Infinity
@@ -18,51 +15,76 @@ GRAPH_TYPE = "follow"
 MAX_HOPS = 1
 MAX_REPLY_RECURSIONS = 10
 
-// using global variables to this extent is horrifying, but javascript has forced my hand
+// only instantiate a ssb-client once, so we don't have to create a new connection every time we load a channel page
 let client = null;
-let outputStream = Pushable();
-let allowedBlobs = [];
-let idsInMainChannel = {};
-let allMessages = {};
-let opts = DEFAULT_OPTS;
 
-function pushMessage(newMsg) {
-	if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
-		idsInMainChannel[newMsg.value.author] = true;
-		allMessages[newMsg.key] = newMsg;
-		requestBlobs(newMsg);
-	}
-}
+class ChannelController {
+	constructor(opts) {
+		this.opts = opts,
+		this.outputStream = Pushable(),
+		this.idsInChannel = {},
+		this.rootMessages = {}, // used to check for replies
 
-function sortAndPushAllMessages() {
-	let messages = Object.keys(allMessages).map(function(msgId) { return allMessages[msgId]; });
-	for(let msg of messages.sort((a, b) => b.value.timestamp - a.value.timestamp)) {
-		outputStream.push(msg);
-	}
-	exit()
-}
+		this.getMessagesFrom = function(channelName, followedIds, preserve, cb) {
+			var hashtagStream = createHashtagStream("#" + channelName);
+			var channelStream = createChannelStream(channelName);
+			var stream = many([hashtagStream, channelStream]);
 
-function getReplies(rootMessages) {
-	let replyStreams = [];
+			var self = this;
+			pull(stream, pull.filter(function(msg) {
+				return followedIds.includes(msg.value.author.toLowerCase());
+			}), pull.drain(function(msg) {
+				self.pushMessage(msg);
+			}, function() {
+				self.getReplies();
+			}));
 
-	for(userId of Object.keys(idsInMainChannel)) {
-		replyStreams.push(createUserStream(client, userId));
-	}
-
-	pull(
-		many(replyStreams),
-		pull.filter(function(msg) {
-			let messageIsValid = msg.value && msg.value.content && msg.value.content.root;
-			return messageIsValid && !(rootMessages.includes(msg.key)) && (rootMessages.includes(msg.value.content.root));
-		}),
-		pull.drain(function(msg) {
-			pushMessage(msg);
+			cb(this.outputStream, preserve);
 		},
-		function() {
-			sortAndPushAllMessages();
-			getRelevantProfilePictures();
-		})
-	);
+		this.pushMessage = function(newMsg) {
+			this.idsInChannel[newMsg.value.author] = true;
+			if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
+				this.rootMessages[newMsg.key] = newMsg;
+				requestBlobs(newMsg);
+			}
+		},
+		this.getReplies = function() {
+			let replyStreams = [];
+
+			for(let userId of Object.keys(this.idsInChannel)) {
+				replyStreams.push(createUserStream(userId));
+			}
+
+			let self = this;
+			pull(
+				many(replyStreams),
+				pull.filter(function(msg) {
+					let messageIsValid = msg.value && msg.value.content && msg.value.content.root;
+					return messageIsValid && !(msg.key in self.rootMessages) && (msg.value.content.root in self.rootMessages);
+				}),
+				pull.drain(function(msg) {
+					self.pushMessage(msg);
+				},
+				function() {
+					self.sortAndPushAllMessages();
+					getProfilePicturesOf(Object.keys(self.idsInChannel));
+				})
+			);
+		},
+		this.sortAndPushAllMessages = function() {
+			let self = this;
+			let messages = Object.keys(this.rootMessages).map(function(msgId) { return self.rootMessages[msgId]; });
+			for(let msg of messages.sort((a, b) => b.value.timestamp - a.value.timestamp)) {
+				this.outputStream.push(msg);
+			}
+			this.exit();
+		},
+		this.exit = function() {
+			debug("ending stream")
+			this.outputStream.end();
+			delete this;
+		}
+	}
 }
 
 function requestBlobs(msg) {
@@ -82,14 +104,13 @@ function requestBlobs(msg) {
 	}
 }
 
-function getRelevantProfilePictures() {
-	let relevantIds = Object.keys(idsInMainChannel);
+function getProfilePicturesOf(relevantIds) {
 	let profilePictureStreams = []
 	let profilePictureFound = {};
 
 	for(let userId of relevantIds) {
 		profilePictureFound[userId] = false;
-		profilePictureStreams.push(createMetadataStream(client, userId));
+		profilePictureStreams.push(createMetadataStream(userId));
 	}
 	let collectedStream = many(profilePictureStreams);
 
@@ -121,8 +142,6 @@ function getRelevantProfilePictures() {
 }
 
 function getBlob(blobId) {
-	allowedBlobs.push(blobId);
-
 	debug("Ensuring existence of blob with ID " + blobId);
 	client.blobs.has(blobId, function(err, has) {
 		if(err) {
@@ -135,11 +154,6 @@ function getBlob(blobId) {
 	});
 }
 
-function exit() { // is called at the end of the getReplies -> getRelevantProfilePictures chain
-	debug("exiting...")
-	outputStream.end();
-}
-
 function debug(message) {
 	if(DEBUG) {
 		var timestamp = new Date();
@@ -147,11 +161,10 @@ function debug(message) {
 	}
 }
 
-function createHashtagStream(client, channelName) {
+/*function createHashtagStream(channelName) {
 	var search = client.search && client.search.query;
         if(!search) {
                 console.log("[FATAL] ssb-search plugin must be installed to us channels");
-                process.exit(5);
         }
 
         var query = search({
@@ -159,9 +172,28 @@ function createHashtagStream(client, channelName) {
         });
 
 	return query;
+}*/
+
+function createHashtagStream(channelTag) {
+	var query = client.query.read({
+		query: [{
+                       	"$filter": {
+                               	value: {
+                                       	content: {
+                                       		mentions: [
+                                       			channelTag
+                                       		]
+                                        	}
+                        		}
+       	        	}
+                }],
+               reverse: true
+	});
+
+	return query;
 }
 
-function createChannelStream(client, channelName) {
+function createChannelStream(channelName) {
 	var query = client.query.read({
 		query: [{
                        	"$filter": {
@@ -178,7 +210,7 @@ function createChannelStream(client, channelName) {
 	return query;
 }
 
-function createUserStream(client, userId) {
+function createUserStream(userId) {
 	var query = client.createUserStream({
 		id: userId
 	});
@@ -186,7 +218,7 @@ function createUserStream(client, userId) {
 	return query;
 }
 
-function createMetadataStream(client, userId) {
+function createMetadataStream(userId) {
 	var query = client.query.read({
 		query: [{
                        	"$filter": {
@@ -205,25 +237,6 @@ function createMetadataStream(client, userId) {
 	return query;
 }
 
-function getMessagesFrom(channelName, followedIds, preserve, cb) {
-	var channelTag = "#" + channelName;
-	var hashtagStream = createHashtagStream(client, channelName);
-	var channelStream = createChannelStream(client, channelName);
-	var stream = many([hashtagStream, channelStream]);
-
-	outputStream = Pushable(); // have to create a new outputStream every time, or all calls to getMessages after the first will return the already empty outputStream, causing patchfoo to return no messages
-
-	pull(stream, pull.filter(function(msg) {
-		return followedIds.includes(msg.value.author.toLowerCase());
-	}), pull.drain(function(msg) {
-		pushMessage(msg);
-	}, function() {
-		getReplies(Object.keys(allMessages));
-	}));
-
-	cb(outputStream, preserve);
-}
-
 function getConfig() {
 	return {
 		host: config.host || "localhost",
@@ -233,8 +246,7 @@ function getConfig() {
 
 module.exports = {
 	getMessages: function(ssbClient, channelName, ssbOpts, preserve, cb, hops=MAX_HOPS) {
-		client = ssbClient; // set global variables
-		opts = ssbOpts;
+		client = ssbClient;
 
 		client.friends.hops({
 			dunbar: Number.MAX_SAFE_INTEGER,
@@ -245,7 +257,8 @@ module.exports = {
 			}
 
 			var followedIds = Object.keys(friends).map(id => id.toLowerCase());
-			getMessagesFrom(channelName, followedIds, preserve, cb);
+			let controller = new ChannelController(ssbOpts || DEFAULT_OPTS);
+			controller.getMessagesFrom(channelName, followedIds, preserve, cb);
 		});
 	}
 }

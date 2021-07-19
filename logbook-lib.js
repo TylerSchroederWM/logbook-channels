@@ -26,13 +26,30 @@ class ChannelController {
 		this.rootMessages = {}, // used to check for replies
 
 		this.getMessagesFrom = function(channelName, followedIds, preserve, cb) {
-			var hashtagStream = createHashtagStream("#" + channelName);
+			var channelTag = "#" + channelName;
+			var hashtagStream = createHashtagStream(channelTag);
 			var channelStream = createChannelStream(channelName);
 			var stream = many([hashtagStream, channelStream]);
 
 			var self = this;
 			pull(stream, pull.filter(function(msg) {
 				return followedIds.includes(msg.value.author.toLowerCase());
+			}), pull.filter(function(msg) {
+				if(msg.value && msg.value.content && msg.value.content.channel && msg.value.content.channel == channelName) {
+					return true;
+				}
+				
+				// prevent ssb-search from grouping messages with #logbook and #logbook2 together, without running a double search
+				if(msg.value && msg.value.content && msg.value.content.text) {
+					let acceptableHashtags = [channelTag + "\n", channelTag + " "];
+					for(let hashtag of acceptableHashtags) {
+						if(msg.value.content.text.indexOf(hashtag) != -1) {
+							return true
+						}
+					}
+					
+					return false;
+				}
 			}), pull.drain(function(msg) {
 				self.pushMessage(msg);
 			}, function() {
@@ -161,7 +178,7 @@ function debug(message) {
 	}
 }
 
-/*function createHashtagStream(channelName) {
+function createHashtagStream(channelName) {
 	var search = client.search && client.search.query;
         if(!search) {
                 console.log("[FATAL] ssb-search plugin must be installed to us channels");
@@ -172,9 +189,9 @@ function debug(message) {
         });
 
 	return query;
-}*/
+}
 
-function createHashtagStream(channelTag) {
+/*function createHashtagStream(channelTag) {
 	var query = client.query.read({
 		query: [{
                        	"$filter": {
@@ -191,7 +208,7 @@ function createHashtagStream(channelTag) {
 	});
 
 	return query;
-}
+}*/
 
 function createChannelStream(channelName) {
 	var query = client.query.read({

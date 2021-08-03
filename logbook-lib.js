@@ -2,7 +2,7 @@ var clientFactory = require("ssb-client");
 var config = require("ssb-config");
 var pull = require("pull-stream");
 var Pushable = require("pull-pushable");
-var many = require("pull-many");
+var many = require("./pull-many-v2");
 
 // Change to 'true' to get debugging output
 DEBUG = !false
@@ -13,17 +13,32 @@ DEFAULT_OPTS = {
 }
 GRAPH_TYPE = "follow"
 MAX_HOPS = 1
-MAX_REPLY_RECURSIONS = 10
 
 // only instantiate a ssb-client once, so we don't have to create a new connection every time we load a channel page
 let client = null;
+
+class StreamData {
+	constructor() {
+		this.finished = false,
+		this.oldestTimestampSeen = Number.MAX_SAFE_INTEGER,
+		this.waitingMessages = []
+
+		this.markFinished = function() {
+			this.finished = true,
+			this.oldestTimestampSeen = 0
+		}
+	}
+}
 
 class ChannelController {
 	constructor(opts) {
 		this.opts = opts,
 		this.outputStream = Pushable(),
 		this.idsInChannel = {},
-		this.rootMessages = {}, // used to check for replies
+		this.streamData = {
+			channelStream: new StreamData(),
+			hashtagStream: new StreamData(),
+		},
 
 		this.getMessagesFrom = function(channelName, followedIds, preserve, cb) {
 			var channelTag = "#" + channelName;
@@ -33,17 +48,17 @@ class ChannelController {
 
 			var self = this;
 			pull(stream, pull.filter(function(msg) {
-				return followedIds.includes(msg.value.author.toLowerCase());
+				return followedIds.includes(msg.data.value.author.toLowerCase());
 			}), pull.filter(function(msg) {
-				if(msg.value && msg.value.content && msg.value.content.channel && msg.value.content.channel == channelName) {
+				if(msg.data.value && msg.data.value.content && msg.data.value.content.channel && msg.data.value.content.channel == channelName) {
 					return true;
 				}
 				
 				// prevent ssb-search from grouping messages with #logbook and #logbook2 together, without running a double search
-				if(msg.value && msg.value.content && msg.value.content.text) {
+				if(msg.data.value && msg.data.value.content && msg.data.value.content.text) {
 					let acceptableHashtags = [channelTag + "\n", channelTag + " "];
 					for(let hashtag of acceptableHashtags) {
-						if(msg.value.content.text.indexOf(hashtag) != -1) {
+						if(msg.data.value.content.text.indexOf(hashtag) != -1) {
 							return true
 						}
 					}
@@ -51,21 +66,47 @@ class ChannelController {
 					return false;
 				}
 			}), pull.drain(function(msg) {
-				self.pushMessage(msg);
+				self.pushMessage(msg.source, msg.data);
 			}, function() {
-				self.getReplies();
+				self.finish();
 			}));
 
 			cb(this.outputStream, preserve);
 		},
-		this.pushMessage = function(newMsg) {
+		this.pushMessage = function(msgSource, newMsg) {
 			this.idsInChannel[newMsg.value.author] = true;
+			var streamData = msgSource == "hashtag" ? this.streamData.hashtagStream : this.streamData.channelStream;
+			streamData.oldestTimestampSeen = newMsg.value.timestamp;
+			
 			if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
-				this.rootMessages[newMsg.key] = newMsg;
+				streamData.waitingMessages.push(newMsg);
 				requestBlobs(newMsg);
 			}
+
+			this.pushNewlySafeMessages();
 		},
-		this.getReplies = function() {
+		this.pushNewlySafeMessages = function() {
+			var newlySafeMessages = [];
+			var oldestSafeTimestamp = Math.max(...Object.values(this.streamData).map(datum => datum.oldestTimestampSeen));
+			debug("pushing messages from before " + oldestSafeTimestamp + "...");
+
+			for(var streamDataIndex in this.streamData) {
+				var streamDatum = this.streamData[streamDataIndex]
+				while(streamDatum.waitingMessages.length && streamDatum.waitingMessages[0].value.timestamp >= oldestSafeTimestamp) {
+					var safeMsg = streamDatum.waitingMessages.shift(); // pop the newest waiting message
+					debug("pushing safe message with timestamp " + safeMsg.value.timestamp);
+					newlySafeMessages.push(safeMsg);
+				}
+			}
+			debug("pushed all newly safe messages");
+
+			// in general, newlySafeMessages might not be in order, we should sort before appending
+			newlySafeMessages.sort((msg1, msg2) => (msg1.value.timestamp > msg2.value.timestamp ? -1 : 1));
+			for(var msgIndex in newlySafeMessages) {
+				this.outputStream.push(newlySafeMessages[msgIndex]);
+			}
+		},
+		/*this.getReplies = function() {
 			let replyStreams = [];
 
 			for(let userId of Object.keys(this.idsInChannel)) {
@@ -95,9 +136,13 @@ class ChannelController {
 				this.outputStream.push(msg);
 			}
 			this.exit();
-		},
-		this.exit = function() {
-			debug("ending stream")
+		},*/
+		this.finish = function() {
+			for(var datumIndex in this.streamData) {
+				this.streamData[datumIndex].oldestTimestampSeen = 0;
+			}
+			this.pushNewlySafeMessages();
+			
 			this.outputStream.end();
 			delete this;
 		}
@@ -188,6 +233,8 @@ function createHashtagStream(channelName) {
                 query: channelName
         });
 
+	query.streamName = "hashtag";
+
 	return query;
 }
 
@@ -223,6 +270,8 @@ function createChannelStream(channelName) {
                 }],
                reverse: true
 	});
+
+	query.streamName = "channel";
 
 	return query;
 }

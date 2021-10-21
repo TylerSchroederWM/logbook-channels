@@ -56,11 +56,17 @@ class ChannelController {
 				if(self.streamOpen[msg.source]) {
 					if(msg.data.value.timestamp <= self.mostRecentCachedTimestamp) {
 						self.streamOpen[msg.source] = false;
+						for(var manyStream of stream.inputs) {
+							if(manyStream.read.streamName == msg.source) {
+								manyStream.ended = true; // forcefully end stream from ssb side
+								break; // will never be more than one stream with the same name
+							}
+						}
 						debug("found last new message from stream " + msg.source);
 
 						let finished = true;
-						for(let st in self.streamOpen) {
-							finished = finished && !self.streamOpen[st];
+						for(var manyStream of stream.inputs) {
+							finished = finished && manyStream.ended;
 						}
 
 						if(finished) {
@@ -88,7 +94,7 @@ class ChannelController {
 			}), pull.drain(function(msg) {
 				self.pushMessage(msg.source, msg.data);
 			}, function() {
-				self.finish(followedIds);
+				self.getReplies(followedIds);
 			}));
 
 			cb(this.outputStream, preserve);
@@ -102,11 +108,6 @@ class ChannelController {
 				debug("pushing message with key " + newMsg.key);
 				this.outputQueue.push(newMsg);
 			}
-		},
-		this.finish = function(followedIds) {
-			this.getReplies(followedIds);
-
-			// this.outputStream.end();
 		},
 		this.getReplies = function(followedIds) {
 			var backlinkStreams = [];
@@ -240,7 +241,7 @@ function getBacklinkStream(msgId) {
 	return client.links(q);
 }
 
-function createHashtagStream(channelName) {
+/*function createHashtagStream(channelName) {
 	var search = client.search && client.search.query;
         if(!search) {
                 console.log("[FATAL] ssb-search plugin must be installed to use channels");
@@ -253,26 +254,23 @@ function createHashtagStream(channelName) {
 	query.streamName = "hashtag";
 
 	return query;
-}
+}*/
 
-/*function createHashtagStream(channelTag) {
+function createHashtagStream(channelName) {
 	var query = client.query.read({
-		query: [{
-                       	"$filter": {
-                               	value: {
-                                       	content: {
-                                       		mentions: [
-                                       			channelTag
-                                       		]
-                                        	}
-                        		}
-       	        	}
-                }],
-               reverse: true
+		"$filter": {
+			value: {
+				content: {
+					text: channelName
+				}
+			}
+		}
 	});
 
+	query.streamName = "hashtag";
+
 	return query;
-}*/
+}
 
 function createChannelStream(channelName) {
 	var query = client.query.read({

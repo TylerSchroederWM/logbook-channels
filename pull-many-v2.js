@@ -1,5 +1,6 @@
 // All credit to https://github.com/pull-stream/pull-many/blob/master/index.js
-// Edits have been made to distinguish the original stream that each object came from
+// Edits have been made to distinguish the original stream that each object came from,
+// and to be able to end each stream independently
 
 module.exports = function (ary) {
 
@@ -59,7 +60,13 @@ module.exports = function (ary) {
           current.ready = true
           current.reading = false
 
-          if(end === true || abort) current.ended = true
+          if(end === true || abort) {
+          	current.ended = true
+          	if(current.read.streamName) {
+	          	var timestamp = new Date();
+			console.log("[pull-many-v2] [" + timestamp.toISOString() + "] " +  "reached the end of stream " + current.read.streamName);
+          	}
+          }
           else if(end) abort = current.ended = end
           //check whether we need to abort this stream.
           if(abort && !end) current.read(abort, next)
@@ -90,6 +97,8 @@ module.exports = function (ary) {
   read.cap = function (err) {
     read.add(null)
   }
+  
+  read.inputs = inputs
 
   return read
 }

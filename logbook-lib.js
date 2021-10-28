@@ -25,8 +25,6 @@ class ChannelController {
 	constructor(opts) {
 		this.opts = opts,
 		this.outputStream = Pushable(),
-		this.rootMessages = [],
-		this.outputQueue = [],
 		this.idsInChannel = {},
 		this.streamOpen = {
 			"channel": true,
@@ -41,8 +39,9 @@ class ChannelController {
 
 			this.channelName = channelName;
 			this.rootMessages = rootMessages;
-			this.allMessages = allMessages;
+			this.rootIds = rootMessages.map(msg => msg.key); // don't know whether it's worth constructing a hashmap for this
 			this.mostRecentCachedTimestamp = mostRecentCachedTimestamp;
+			this.outputQueue = allMessages;
 
 			var self = this;
 			pull(stream, pull.filter(function(msg) {
@@ -54,7 +53,7 @@ class ChannelController {
 
 				// ignore every message from a stream that's before the ones we cached
 				if(self.streamOpen[msg.source]) {
-					if(msg.data.value.timestamp <= self.mostRecentCachedTimestamp) {
+					if(self.mostRecentCachedTimestamp && msg.data.value.timestamp <= self.mostRecentCachedTimestamp) {
 						self.streamOpen[msg.source] = false;
 						for(var manyStream of stream.inputs) {
 							if(manyStream.read.streamName == msg.source) {
@@ -94,7 +93,19 @@ class ChannelController {
 			}), pull.drain(function(msg) {
 				self.pushMessage(msg.source, msg.data);
 			}, function() {
-				self.getReplies(followedIds);
+				if(self.mostRecentCachedTimestamp) {
+					self.getReplies(followedIds);
+				}
+				else {
+					pull( // ugly hack to get the most recent message timestamp into mostRecentCachedTimestamp, even though we only look at backlinks here
+						client.messagesByType({type: "post", reverse: true, limit: 1}),
+						pull.drain(function (msg) {
+							self.mostRecentCachedTimestamp = msg.value.timestamp;
+						}, () => {})
+					);
+					
+					self.getRepliesInitial(followedIds);
+				}
 			}));
 
 			cb(this.outputStream, preserve);
@@ -109,7 +120,48 @@ class ChannelController {
 				this.outputQueue.push(newMsg);
 			}
 		},
+		this.finish = function() {
+			this.outputQueue.sort((msg1, msg2) => (msg1.value.timestamp > msg2.value.timestamp ? -1 : 1));
+			debug("done sorting messages");
+
+			memoryCache[this.channelName] = this.outputQueue;
+			for(var msg of this.outputQueue) {
+				this.outputStream.push(msg);
+			}
+
+			fs.writeFile(CACHE_FILEPATH + this.channelName + ".txt", JSON.stringify({"root": this.rootMessages, "allMessages": memoryCache[this.channelName], "mostRecentCachedTimestamp": this.mostRecentCachedTimestamp}), (error) => {
+				if(error) {
+					debug("[ERROR] Failed writing to message cache: " + error);
+				}
+				else {
+					debug("Successfully saved messages to " + CACHE_FILEPATH + this.channelName + ".txt");
+				}
+			});
+
+			this.outputStream.end()
+		},
 		this.getReplies = function(followedIds) {
+			var stream = client.messagesByType({type: "post", gt: this.mostRecentCachedTimestamp})
+			debug("looking for new replies");
+			
+			var self = this;
+			pull(
+				stream, 
+				pull.filter(function(msg) { // assume all messages have msg.value.content, otherwise they wouldn't have post type
+					debug("filtering message " + JSON.stringify(msg));
+					self.mostRecentCheckedTimestamp = msg.value.timestamp;
+					return (!msg.value.content.text || msg.value.content.text.indexOf("#" + self.channelName) == -1) && msg.value.content.channelName != self.channelName && followedIds.includes(msg.value.author.toLowerCase());
+				}),
+				pull.filter(function(msg) {
+					return msg.value.content.root && self.rootIds.includes(msg.value.content.root);
+				}),
+				pull.drain(function(msg) {
+					debug("found new reply: " + JSON.stringify(msg));
+					self.outputQueue.push(msg);
+				}, self.finish.bind(self))
+			);
+		},
+		this.getRepliesInitial = function(followedIds) {
 			var backlinkStreams = [];
 			debug("creating backlink streams");
 			for(const msg in this.rootMessages) {
@@ -132,27 +184,8 @@ class ChannelController {
 				pull.drain(function(msg) {
 					debug("backlink message had correct timestamps: " + JSON.stringify(msg.data));
 					self.outputQueue.push(msg.data);
-				}, function() {
-					self.outputQueue.sort((msg1, msg2) => (msg1.value.timestamp > msg2.value.timestamp ? -1 : 1));
-					debug("done sorting messages");
-
-					memoryCache[self.channelName] = self.outputQueue;
-					for(var msg of self.outputQueue) {
-						self.outputStream.push(msg);
-					}
-
-					fs.writeFile(CACHE_FILEPATH + self.channelName + ".txt", JSON.stringify({"root": self.rootMessages, "allMessages": self.outputQueue}), (error) => {
-						if(error) {
-							debug("[ERROR] Failed writing to message cache: " + error);
-						}
-						else {
-							debug("Successfully saved messages to " + CACHE_FILEPATH + self.channelName + ".txt");
-						}
-					})
-
-					self.outputStream.end()
-				})
-			)
+				}, self.finish.bind(self))
+			);
 		}
 	}
 }
@@ -365,13 +398,13 @@ module.exports = {
 			cb(outputStream, preserve);
 		}
 		else {
-			var mostRecentCachedTimestamp = -Infinity;
+			var mostRecentCachedTimestamp = null;
 			var rootMessages = [];
 			var allMessages = [];
 			if (fs.existsSync(CACHE_FILEPATH + channelName + ".txt")) {
 				cache = JSON.parse(fs.readFileSync(CACHE_FILEPATH + channelName + ".txt"));
 				if (cache.root.length) {
-					mostRecentCachedTimestamp = cache.root[0].value.timestamp;
+					mostRecentCachedTimestamp = cache.mostRecentCachedTimestamp;
 					rootMessages = cache.root;
 					allMessages = cache.allMessages;
 				}

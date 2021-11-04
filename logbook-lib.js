@@ -109,14 +109,17 @@ class ChannelController {
 				this.outputStream.push(msg);
 			}
 
-			fs.writeFile(CACHE_FILEPATH + this.channelName + ".txt", JSON.stringify({"root": this.rootIds, "allMessages": memoryCache[this.channelName], "mostRecentCachedTimestamp": this.mostRecentCachedTimestamp}), (error) => {
-				if(error) {
-					debug("[ERROR] Failed writing to message cache: " + error);
-				}
-				else {
-					debug("Successfully saved messages to " + CACHE_FILEPATH + this.channelName + ".txt");
-				}
-			});
+			if(this.outputQueue.length) {
+				fs.writeFile(CACHE_FILEPATH + this.channelName + ".txt", JSON.stringify({"root": this.rootIds, "allMessages": memoryCache[this.channelName], "mostRecentCachedTimestamp": this.mostRecentCachedTimestamp}), (error) => {
+					if(error) {
+						debug("[ERROR] Failed writing to message cache: " + error);
+					}
+					else {
+						debug("Successfully saved messages to " + CACHE_FILEPATH + this.channelName + ".txt");
+					}
+				});
+			}
+			
 
 			this.outputStream.end()
 		},

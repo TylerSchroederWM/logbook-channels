@@ -55,12 +55,12 @@ class ChannelController {
 			pull(stream, pull.filter(function(msg) {
 				return followedIds.includes(msg.data.value.author.toLowerCase());
 			}), pull.filter(function(msg) {
-				if(msg.data.value && msg.data.value.content && msg.data.value.content.channel && msg.data.value.content.channel == channelName) {
+				if(msg.data.value && msg.data.value.content && msg.data.value.content.channel && msg.data.value.content.channel == self.channelName) {
 					return true;
 				}
 
 				// filter out false positives from ssb-query's loose text matching
-				if(msg.data.value && msg.data.value.content && msg.data.value.content.text) {
+				if(msg.data.value && msg.data.value.content && msg.data.value.content.text && msg.data.value.content.text.indexOf) {
 					let acceptableHashtags = [channelTag + "\n", channelTag + " "];
 					for(let hashtag of acceptableHashtags) {
 						if(msg.data.value.content.text.indexOf(hashtag) != -1) {

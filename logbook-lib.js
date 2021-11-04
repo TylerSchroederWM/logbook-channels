@@ -15,11 +15,12 @@ DEFAULT_OPTS = {
 GRAPH_TYPE = "follow"
 MAX_HOPS = 1
 
-CACHE_FILEPATH = "./"
+CACHE_FILEPATH = "./logbook_cache/"
 
 // only instantiate a ssb-client once, so we don't have to create a new connection every time we load a channel page
 let client = null;
-let memoryCache = {}
+let memoryCache = {};
+fs.mkdirSync(CACHE_FILEPATH, {recursive: true});
 
 class ChannelController {
 	constructor(opts) {

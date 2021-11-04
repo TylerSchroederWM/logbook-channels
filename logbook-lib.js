@@ -287,7 +287,7 @@ function getBacklinkStream(msgId) {
 	return client.links(q);
 }
 
-/*function createHashtagStream(channelName) {
+function createHashtagStream(channelName) {
 	var search = client.search && client.search.query;
         if(!search) {
                 console.log("[FATAL] ssb-search plugin must be installed to use channels");
@@ -300,9 +300,9 @@ function getBacklinkStream(msgId) {
 	query.streamName = "hashtag";
 
 	return query;
-}*/
+}
 
-function createHashtagStream(channelName) {
+/*function createHashtagStream(channelName) {
 	var query = client.query.read({
 		"$filter": {
 			value: {
@@ -316,7 +316,7 @@ function createHashtagStream(channelName) {
 	query.streamName = "hashtag";
 
 	return query;
-}
+}*/
 
 function createChannelStream(channelName) {
 	var query = client.query.read({

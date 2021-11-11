@@ -159,7 +159,7 @@ class ChannelController {
 				}),
 				pull.drain(function(msg) {
 					debug("found new message: " + JSON.stringify(msg));
-					self.outputQueue.push(msg);
+					self.pushMessage(msg);
 				}, self.finish.bind(self))
 			);
 			

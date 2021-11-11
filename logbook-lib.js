@@ -303,17 +303,15 @@ function getBacklinkStream(msgId) {
 }
 
 function createHashtagStream(channelName) {
-	var query = client.query.read({
-		"$filter": {
-			value: {
-				content: {
-					text: channelName
-				}
-			}
-		}
-	});
+	var search = client.search && client.search.query;
+        if(!search) {
+                console.log("[FATAL] ssb-search plugin must be installed to us channels");
+                process.exit(5);
+        }
 
-	query.streamName = "hashtag";
+        var query = search({
+                query: channelName
+        });
 
 	return query;
 }

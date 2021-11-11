@@ -145,7 +145,7 @@ class ChannelController {
 					return followedIds.includes(msg.value.author.toLowerCase());
 				}),
 				pull.filter(function(msg) { // assume all messages have msg.value.content, otherwise they wouldn't have post type
-					if((msg.value.content.text && (msg.value.content.text.indexOf("#" + self.channelName + "\n") != -1 || msg.value.content.text.indexOf("#" + self.channelName + " ") != -1)) || msg.value.content.channelName == self.channelName) {
+					if((msg.value.content.text && (msg.value.content.text.indexOf("#" + self.channelName + "\n") != -1 || msg.value.content.text.indexOf("#" + self.channelName + " ") != -1)) || msg.value.content.channel == self.channelName) {
 						debug("found new root message: " + JSON.stringify(msg));
 						self.rootIds.push(msg.key);
 						return true;
@@ -304,8 +304,10 @@ function getBacklinkStream(msgId) {
 
 function createHashtagStream(channelName) {
 	var search = client.search && client.search.query;
+	debug("search: " + client.search);
+	debug("query: " + client.search.query);
         if(!search) {
-                console.log("[FATAL] ssb-search plugin must be installed to us channels");
+                console.log("[FATAL] ssb-search plugin must be installed to use channels");
                 process.exit(5);
         }
 

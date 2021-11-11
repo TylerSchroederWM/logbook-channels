@@ -407,7 +407,7 @@ function readAllowedBlobs() {
 }
 
 function updateBlobsFile() {
-	fs.writeFile(allowedBlobs.join("\n"), {encoding: 'utf8'}, () => {});
+	fs.writeFile(SBOT_BLOBS_FILE, allowedBlobs.join("\n"), {encoding: 'utf8'}, () => {});
 }
 
 module.exports = {

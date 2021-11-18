@@ -4,12 +4,13 @@ var config = require("ssb-config");
 var fs = require("fs");
 var pull = require("pull-stream");
 var Pushable = require("pull-pushable");
-var many = require("./pull-many-v2");
+var many = require("pull-many");
+var path = require("path");
+const home = require("os").homedir();
 
 // Change to 'true' to get debugging output
 DEBUG = !false
 
-DEFAULT_CHANNEL_NAME = "logbook"
 DEFAULT_OPTS = {
 	lt: Date.now(),
 	gt: -Infinity
@@ -17,11 +18,20 @@ DEFAULT_OPTS = {
 GRAPH_TYPE = "follow"
 MAX_HOPS = 1
 
-CACHE_FILEPATH = "./"
+SBOT_ROOT = path.join(home, ".ssb");
+SBOT_BLOB_DIR = path.join(SBOT_ROOT, "blobs");
+CACHE_FILEPATH = path.join(SBOT_ROOT, "logbook_cache");
+SBOT_BLOBS_FILE = path.join(SBOT_BLOB_DIR, "allowed_blobs");
+PATHS = [SBOT_ROOT, SBOT_BLOB_DIR, CACHE_FILEPATH]
+FILES = [SBOT_BLOBS_FILE]
+ensureFiles();
+
+SBOT_CHANNEL_NAMES_FILE = path.join(SBOT_ROOT, "tracked_channels.txt");
 
 // only instantiate a ssb-client once, so we don't have to create a new connection every time we load a channel page
 let client = null;
-let memoryCache = {}
+let allowedBlobs = readAllowedBlobs();
+let finishedTracker = {}
 
 class ChannelController {
 	constructor(opts) {
@@ -32,60 +42,43 @@ class ChannelController {
 			"channel": true,
 			"hashtag": true,
 		},
-
-		this.getMessagesFrom = function(mostRecentCachedTimestamp, rootMessages, allMessages, channelName, followedIds, preserve, cb) {
-			var channelTag = "#" + channelName;
-			var hashtagStream = createHashtagStream(channelTag);
-			var channelStream = createChannelStream(channelName);
-			var stream = many([hashtagStream, channelStream]);
-
+		
+		this.getMessagesFrom = function(mostRecentCachedTimestamp, rootIds, allMessages, channelName, followedIds, preserve, cb) {
 			this.channelName = channelName;
-			this.rootMessages = rootMessages;
-			this.rootIds = rootMessages.map(msg => msg.key); // don't know whether it's worth constructing a hashmap for this
+			this.rootIds = rootIds; // don't know whether it's worth constructing a hashmap for this
 			this.mostRecentCachedTimestamp = mostRecentCachedTimestamp;
-			this.outputQueue = allMessages;
+			this.outputQueue = [];
+			
+			for(let msg of allMessages) {
+				this.pushMessage(msg);
+			}
+			
+			if(mostRecentCachedTimestamp == null) {
+				this.getInitialMessages(followedIds, preserve, cb);
+			}
+			else {
+				this.getNewMessages(followedIds, preserve, cb);
+			}
+		},
+		this.getInitialMessages = function(followedIds, preserve, cb) {
+			var channelTag = "#" + this.channelName;
+			var hashtagStream = createHashtagStream(channelTag);
+			var channelStream = createChannelStream(this.channelName);
+			var stream = many([hashtagStream, channelStream]);
 
 			var self = this;
 			pull(stream, pull.filter(function(msg) {
-				return followedIds.includes(msg.data.value.author.toLowerCase());
+				return followedIds.includes(msg.value.author.toLowerCase());
 			}), pull.filter(function(msg) {
-				if(msg.data.value && msg.data.value.content && msg.data.value.content.channel && msg.data.value.content.channel == channelName) {
+				if(msg.value && msg.value.content && msg.value.content.channel && msg.value.content.channel == self.channelName) {
 					return true;
 				}
 
-				// ignore every message from a stream that's before the ones we cached
-				if(self.streamOpen[msg.source]) {
-					if(self.mostRecentCachedTimestamp && msg.data.value.timestamp <= self.mostRecentCachedTimestamp) {
-						self.streamOpen[msg.source] = false;
-						for(var manyStream of stream.inputs) {
-							if(manyStream.read.streamName == msg.source) {
-								manyStream.ended = true; // forcefully end stream from ssb side
-								break; // will never be more than one stream with the same name
-							}
-						}
-						debug("found last new message from stream " + msg.source);
-
-						let finished = true;
-						for(var manyStream of stream.inputs) {
-							finished = finished && manyStream.ended;
-						}
-
-						if(finished) {
-							debug("all streams finished; exiting...");
-							stream.end; // idk if this will actually work
-						}
-						return false; // don't return the first message we've already seen either
-					}
-				}
-				else {
-					return false;
-				}
-
 				// filter out false positives from ssb-query's loose text matching
-				if(msg.data.value && msg.data.value.content && msg.data.value.content.text) {
+				if(msg.value && msg.value.content && msg.value.content.text && msg.value.content.text.indexOf) {
 					let acceptableHashtags = [channelTag + "\n", channelTag + " "];
 					for(let hashtag of acceptableHashtags) {
-						if(msg.data.value.content.text.indexOf(hashtag) != -1) {
+						if(msg.value.content.text.indexOf(hashtag) != -1) {
 							return true
 						}
 					}
@@ -93,7 +86,8 @@ class ChannelController {
 					return false;
 				}
 			}), pull.drain(function(msg) {
-				self.pushMessage(msg.source, msg.data);
+				self.rootIds.push(msg.key);
+				self.pushMessage(msg);
 			}, function() {
 				if(self.mostRecentCachedTimestamp) {
 					self.getReplies(followedIds);
@@ -112,10 +106,9 @@ class ChannelController {
 
 			cb(this.outputStream, preserve);
 		},
-		this.pushMessage = function(msgSource, newMsg) {
+		this.pushMessage = function(newMsg) {
 			this.idsInChannel[newMsg.value.author] = true;
 
-			this.rootMessages.push(newMsg); // regardless of timestamp, we want to look for replies to this message
 			if(newMsg.value.timestamp > opts.gt && newMsg.value.timestamp < opts.lt) {
 				requestBlobs(newMsg);
 				debug("pushing message with key " + newMsg.key);
@@ -126,25 +119,74 @@ class ChannelController {
 			this.outputQueue.sort((msg1, msg2) => (msg1.value.timestamp > msg2.value.timestamp ? -1 : 1));
 			debug("done sorting messages");
 
-			memoryCache[this.channelName] = this.outputQueue;
 			for(var msg of this.outputQueue) {
 				this.outputStream.push(msg);
 			}
 
-			fs.writeFile(CACHE_FILEPATH + this.channelName + ".txt", JSON.stringify({"root": this.rootMessages, "allMessages": memoryCache[this.channelName], "mostRecentCachedTimestamp": this.mostRecentCachedTimestamp}), (error) => {
-				if(error) {
-					debug("[ERROR] Failed writing to message cache: " + error);
-				}
-				else {
-					debug("Successfully saved messages to " + CACHE_FILEPATH + this.channelName + ".txt");
-				}
-			});
+			if(this.outputQueue.length) {
+				fs.writeFile(path.join(CACHE_FILEPATH, this.channelName + ".txt"), JSON.stringify({"root": this.rootIds, "allMessages": this.outputQueue, "mostRecentCachedTimestamp": this.mostRecentCachedTimestamp}), (error) => {
+					if(error) {
+						debug("[ERROR] Failed writing to message cache: " + error);
+					}
+					else {
+						debug("Successfully saved messages to " + path.join(CACHE_FILEPATH, this.channelName + ".txt"));
+					}
+				});
+			}
 
-			this.outputStream.end()
+			debug("updating blobs file for channel " + this.channelName);			
+			updateBlobsFile();
+
+			this.outputStream.end();
+			
+			finishedTracker[this.channelName] = true;
+			debug("finished with channel " + this.channelName);
+			let allFinished = true;
+			for(let key in finishedTracker) {
+				allFinished = allFinished && finishedTracker[key];
+			}
+			
+			if(allFinished) {
+				debug("all channels finished, exiting");
+				process.exit(0);
+			}
+		},
+		this.getNewMessages = function(followedIds, preserve, cb) {
+			var stream = client.messagesByType({type: "post", gt: this.mostRecentCachedTimestamp})
+			debug("looking for new messages");
+			
+			var self = this;
+			pull(
+				stream, 
+				pull.filter(function(msg) {
+					debug("filtering message " + JSON.stringify(msg));
+					self.mostRecentCheckedTimestamp = msg.value.timestamp;
+					return followedIds.includes(msg.value.author.toLowerCase());
+				}),
+				pull.filter(function(msg) { // assume all messages have msg.value.content, otherwise they wouldn't have post type
+					if((msg.value.content.text && (msg.value.content.text.indexOf("#" + self.channelName + "\n") != -1 || msg.value.content.text.indexOf("#" + self.channelName + " ") != -1)) || msg.value.content.channel == self.channelName) {
+						debug("found new root message: " + JSON.stringify(msg));
+						self.rootIds.push(msg.key);
+						return true;
+					}
+					else if(msg.value.content.root && self.rootIds.includes(msg.value.content.root)) {
+						debug("found new reply: " + JSON.stringify(msg));
+						return true;
+					}
+					
+					return false;
+				}),
+				pull.drain(function(msg) {
+					debug("found new message: " + JSON.stringify(msg));
+					self.pushMessage(msg);
+				}, self.finish.bind(self))
+			);
+			
+			cb(this.outputStream, preserve);
 		},
 		this.getReplies = function(followedIds) {
 			var stream = client.messagesByType({type: "post", gt: this.mostRecentCachedTimestamp})
-			debug("looking for new replies");
+			debug("looking for replies");
 			
 			var self = this;
 			pull(
@@ -166,8 +208,8 @@ class ChannelController {
 		this.getRepliesInitial = function(followedIds) {
 			var backlinkStreams = [];
 			debug("creating backlink streams");
-			for(const msg in this.rootMessages) {
-				backlinkStreams.push(getBacklinkStream(msg.key));
+			for(const key in this.rootIds) {
+				backlinkStreams.push(getBacklinkStream(key));
 			}
 
 			var self = this;
@@ -177,15 +219,15 @@ class ChannelController {
 				many(backlinkStreams),
 				pull.filter(function(msg) {
 					debug("checking backlinked message " + JSON.stringify(msg));
-					return msg.data.value && msg.data.value.content && msg.data.value.content.text && (msg.data.value.content.text.indexOf(channelTag) == -1) && !(msg.data.value.content.channelName == self.channelName) && (followedIds.includes(msg.data.value.author.toLowerCase()));
+					return msg.value && msg.value.content && msg.value.content.text && (msg.value.content.text.indexOf(channelTag) == -1) && !(msg.value.content.channelName == self.channelName) && (followedIds.includes(msg.value.author.toLowerCase()));
 				}),
 				pull.filter(function(msg) {
-					debug("found backlink message: " + JSON.stringify(msg.data));
-					return (msg.data.value.timestamp > self.opts.gt) && (msg.data.value.timestamp < self.opts.lt);
+					debug("found backlink message: " + JSON.stringify(msg));
+					return (msg.value.timestamp > self.opts.gt) && (msg.value.timestamp < self.opts.lt);
 				}),
 				pull.drain(function(msg) {
-					debug("backlink message had correct timestamps: " + JSON.stringify(msg.data));
-					self.outputQueue.push(msg.data);
+					debug("backlink message had correct timestamps: " + JSON.stringify(msg));
+					self.outputQueue.push(msg);
 				}, self.finish.bind(self))
 			);
 		}
@@ -248,6 +290,9 @@ function getProfilePicturesOf(relevantIds) {
 
 function getBlob(blobId) {
 	debug("Ensuring existence of blob with ID " + blobId);
+	if(!(blobId in allowedBlobs)) {
+		allowedBlobs.push(blobId);
+	}
 	client.blobs.has(blobId, function(err, has) {
 		if(err) {
 			debug("[ERROR] ssb.blobs.has failed on the blob with ID " + blobId);
@@ -276,33 +321,16 @@ function getBacklinkStream(msgId) {
 	return client.links(q);
 }
 
-/*function createHashtagStream(channelName) {
+function createHashtagStream(channelName) {
 	var search = client.search && client.search.query;
         if(!search) {
                 console.log("[FATAL] ssb-search plugin must be installed to use channels");
+                process.exit(5);
         }
 
         var query = search({
                 query: channelName
         });
-
-	query.streamName = "hashtag";
-
-	return query;
-}*/
-
-function createHashtagStream(channelName) {
-	var query = client.query.read({
-		"$filter": {
-			value: {
-				content: {
-					text: channelName
-				}
-			}
-		}
-	});
-
-	query.streamName = "hashtag";
 
 	return query;
 }
@@ -376,56 +404,75 @@ function getConfig() {
 	}
 }
 
-function main(ssbClient, channelName, ssbOpts, preserve, cb, hops=MAX_HOPS) {
+function ensureFiles() {
+	for(let path of PATHS) {
+		if (!fs.existsSync(path)) {
+			debug("no" + path + " directory detected, creating it...");
+			fs.mkdirSync(path);
+		}
+	}
+	
+	for(let file of FILES) {
+		if (!fs.existsSync(file)) {
+			debug("no " + file + " file detected, creating it...");
+			fs.writeFileSync(file);
+		}
+	}
+}
+
+function readAllowedBlobs() {
+	let contents = fs.readFileSync(SBOT_BLOBS_FILE, "utf8");
+	return contents.split("\n"); // this could cause slowdowns if the metadata file is several gigabytes, but i don't forsee that happening
+}
+
+function updateBlobsFile() {
+	fs.writeFile(SBOT_BLOBS_FILE, allowedBlobs.join("\n"), {encoding: 'utf8'}, () => {});
+}
+
+function getRelevantChannels() {
+	let contents = fs.readFileSync(SBOT_CHANNEL_NAMES_FILE, "utf8");
+	return contents.split("\n");
+}
+
+function main(ssbClient, ssbOpts, preserve, cb, hops=MAX_HOPS) {
 	client = ssbClient;
-	debug("getting messages from #" + channelName);
 
-	if(channelName in memoryCache && 'lt' in ssbOpts) {
-		debug("already fetched messages from this channel");
-		let outputStream = Pushable();
-		ssbOpts = ssbOpts || DEFAULT_OPTS
-		let limit = ssbOpts.limit || 10
-
-		for(let msg of memoryCache[channelName]) {
-			if(msg.value.timestamp < ssbOpts.lt && msg.value.timestamp > ssbOpts.gt) {
-				outputStream.push(msg);
-				limit -= 1;
-				if(limit == 0) {
-					break;
-				}
-			}
+	client.friends.hops({
+		dunbar: Number.MAX_SAFE_INTEGER,
+		max: hops
+	}, function(error, friends) {
+		if(error) {
+			throw "Couldn't get a list of friends from scuttlebot:\n" + error;
 		}
-
-		cb(outputStream, preserve);
-	}
-	else {
-		var mostRecentCachedTimestamp = null;
-		var rootMessages = [];
-		var allMessages = [];
-		if (fs.existsSync(CACHE_FILEPATH + channelName + ".txt")) {
-			cache = JSON.parse(fs.readFileSync(CACHE_FILEPATH + channelName + ".txt"));
-			if (cache.root.length) {
-				mostRecentCachedTimestamp = cache.mostRecentCachedTimestamp;
-				rootMessages = cache.root;
-				allMessages = cache.allMessages;
+		
+		var followedIds = Object.keys(friends).map(id => id.toLowerCase());
+			
+		for(let channelName of getRelevantChannels()) {
+			if(channelName.length == 0) { // trailing newline or user error
+				continue;
 			}
-			debug("successfully read messages from cache");
-			debug("most recent cached timestamp: " + mostRecentCachedTimestamp);
-		}
-
-		client.friends.hops({
-			dunbar: Number.MAX_SAFE_INTEGER,
-			max: hops
-		}, function(error, friends) {
-			if(error) {
-				throw "Couldn't get a list of friends from scuttlebot:\n" + error;
-			}
-
-			var followedIds = Object.keys(friends).map(id => id.toLowerCase());
+			
 			let controller = new ChannelController(ssbOpts || DEFAULT_OPTS);
+			finishedTracker[channelName] = false;
+					
+			var mostRecentCachedTimestamp = null;
+			var rootMessages = [];
+			var allMessages = [];
+			if (fs.existsSync(path.join(CACHE_FILEPATH, channelName + ".txt"))) {
+				cache = JSON.parse(fs.readFileSync(path.join(CACHE_FILEPATH, channelName + ".txt")));
+				if (cache.root.length) {
+					mostRecentCachedTimestamp = cache.mostRecentCachedTimestamp;
+					rootMessages = cache.root;
+					allMessages = cache.allMessages;
+				}
+				debug("successfully read messages from cache for channel " + channelName);
+				debug("most recent cached timestamp: " + mostRecentCachedTimestamp);
+			}
+					
+			debug("starting getMessagesFrom for channel " + channelName);
 			controller.getMessagesFrom(mostRecentCachedTimestamp, rootMessages, allMessages, channelName, followedIds, preserve, cb);
-		});
-	}
+		}
+	});
 }
 
 clientFactory(getConfig(), function(err, client) {
@@ -436,5 +483,5 @@ clientFactory(getConfig(), function(err, client) {
 	if(argv["delete"] || argv["del"]) {
 		argv.d = true;
 	}
-	main(client, argv._[0] || DEFAULT_CHANNEL_NAME, DEFAULT_OPTS, null, () => {});
+	main(client, DEFAULT_OPTS, null, () => {});
 });

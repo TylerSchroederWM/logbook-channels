@@ -459,12 +459,16 @@ function main(ssbClient, ssbOpts, preserve, cb, hops=MAX_HOPS) {
 			var rootMessages = [];
 			var allMessages = [];
 			if (fs.existsSync(path.join(CACHE_FILEPATH, channelName + ".txt"))) {
-				cache = JSON.parse(fs.readFileSync(path.join(CACHE_FILEPATH, channelName + ".txt")));
-				if (cache.root.length) {
-					mostRecentCachedTimestamp = cache.mostRecentCachedTimestamp;
-					rootMessages = cache.root;
-					allMessages = cache.allMessages;
+				let cacheData = fs.readFileSync(path.join(CACHE_FILEPATH, channelName + ".txt"));
+				if(cacheData.length > 0) {
+					cache = JSON.parse(cacheData);
+					if (cache.root.length) {
+						mostRecentCachedTimestamp = cache.mostRecentCachedTimestamp;
+						rootMessages = cache.root;
+						allMessages = cache.allMessages;
+					}
 				}
+				
 				debug("successfully read messages from cache for channel " + channelName);
 				debug("most recent cached timestamp: " + mostRecentCachedTimestamp);
 			}

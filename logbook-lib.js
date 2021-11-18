@@ -44,7 +44,11 @@ class ChannelController {
 			this.channelName = channelName;
 			this.rootIds = rootIds; // don't know whether it's worth constructing a hashmap for this
 			this.mostRecentCachedTimestamp = mostRecentCachedTimestamp;
-			this.outputQueue = allMessages;
+			this.outputQueue = [];
+			
+			for(let msg of allMessages) {
+				this.pushMessage(msg);
+			}
 			
 			if(mostRecentCachedTimestamp == null) {
 				this.getInitialMessages(followedIds, preserve, cb);

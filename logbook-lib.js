@@ -94,10 +94,10 @@ class ChannelController {
 						client.messagesByType({type: "post", reverse: true, limit: 1}),
 						pull.drain(function (msg) {
 							self.mostRecentCachedTimestamp = msg.value.timestamp;
-						}, () => {})
+						}, () => {self.getRepliesInitial(followedIds);})
 					);
 					
-					self.getRepliesInitial(followedIds);
+					// self.getRepliesInitial(followedIds);
 				}
 			}));
 
